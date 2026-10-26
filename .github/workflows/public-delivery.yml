@@ -9,7 +9,7 @@ on:
         description: Full validated commit from the private source repository
         type: string
         required: true
-        default: 81510040534ac8e5a1fea6e3f7585c66c2754610
+        default: 4a19cbd9cbc889ebd53cd8b5f0f17bf00ca2ff0f
       resources_version:
         description: Complete verified illustration baseline already in Releases
         type: string

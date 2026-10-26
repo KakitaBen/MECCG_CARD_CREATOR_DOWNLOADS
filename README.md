@@ -28,3 +28,5 @@ Ce dépôt public héberge les téléchargements et leurs notes de version. Aucu
 compte GitHub n’est nécessaire pour accéder aux releases publiées. Les
 fichiers `manifest.json` et `*.tar.gz` sont utilisés automatiquement par le
 lanceur : l’utilisateur télécharge uniquement le fichier de son système.
+
+Pour la maintenance : [fabrication avec les machines publiques gratuites](BUILDING.md).
