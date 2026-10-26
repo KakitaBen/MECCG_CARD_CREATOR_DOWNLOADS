@@ -5,8 +5,9 @@ l’impression, en français ou en anglais.
 
 **[Choisir ma version et télécharger l’application](https://meccg-card-creator-downloads.kakitaben.chatgpt.site)**
 
-La première version de test complète, **v0.59.50**, est disponible pour les
-trois systèmes. Consultez ses [notes de version](https://github.com/KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS/releases/tag/v0.59.50).
+Une version de test complète est disponible pour les trois systèmes.
+La page de téléchargement propose la version publiée la plus récente ; consultez
+les [notes de version](https://github.com/KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS/releases).
 
 | Ordinateur | Fichier |
 | --- | --- |
