@@ -145,7 +145,8 @@ class Delivery:
         output = self.build / "installers"
         self.python("build_installers.py", "--config", config, "--output", output, "--version", release, "--verify")
         report = json.loads(proof.read_text(encoding="utf-8"))
-        if report.get("status") != "passed":
+        if (report.get("status") != "passed" or not report.get("frozen_gui_started")
+                or not report.get("pillow_tk_pixels")):
             raise ValueError("The installed application did not pass validation")
         report["bundled_https_verified"] = True
         proof.write_text(json.dumps(report, indent=2), encoding="utf-8")

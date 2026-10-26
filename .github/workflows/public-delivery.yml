@@ -9,7 +9,7 @@ on:
         description: Full validated commit from the private source repository
         type: string
         required: true
-        default: 4a19cbd9cbc889ebd53cd8b5f0f17bf00ca2ff0f
+        default: 511744326ee546be048b040d2e52b30c5902d3fb
       resources_version:
         description: Complete verified illustration baseline already in Releases
         type: string
@@ -175,6 +175,8 @@ jobs:
         with: {python-version: "3.13"}
       - if: runner.os == 'Windows'
         run: choco install innosetup -y --no-progress
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth
       - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", TARGET_PLATFORM: "${{ matrix.platform }}"}
         run: python publisher/tools/delivery.py installer --release "$RELEASE_VERSION" --platform "$TARGET_PLATFORM"
   mac-installer:
