@@ -1,0 +1,196 @@
+name: Build installers with free public runners
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/public-delivery.yml", "tools/**", "tests/**"]
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full validated commit from the private source repository
+        type: string
+        required: true
+        default: 81510040534ac8e5a1fea6e3f7585c66c2754610
+      resources_version:
+        description: Complete verified illustration baseline already in Releases
+        type: string
+        required: true
+        default: v0.59.46
+      check_only:
+        description: Check free runner access without reading private source
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: public-delivery
+  cancel-in-progress: false
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+  GH_TOKEN: ${{ github.token }}
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  runner-check:
+    if: github.repository == 'KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS' && github.actor == 'KakitaBen'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: python -m unittest discover -s publisher/tests
+      - run: echo "Standard public runner is available. No private source was needed for this check."
+  prepare:
+    needs: runner-check
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.check_only }}
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Validate selected source and read access
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          RESOURCES_VERSION: ${{ inputs.resources_version }}
+          READ_TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Select a full validated source commit.'; exit 1; }
+          [[ "$RESOURCES_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          test -n "$READ_TOKEN" || { echo 'Add SOURCE_READ_TOKEN with read-only access to the private source repository.'; exit 1; }
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - id: release
+        env: {SOURCE_COMMIT: "${{ inputs.source_commit }}"}
+        run: python publisher/tools/delivery.py prepare --commit "$SOURCE_COMMIT"
+  resources:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: delivery-${{ inputs.resources_version }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source-baseline
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout: .gitattributes
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - env: {BASE_VERSION: "${{ inputs.resources_version }}", RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
+        run: python publisher/tools/delivery.py resources --release "$RELEASE_VERSION" --base "$BASE_VERSION"
+  programs:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, platform: windows-x64}
+          - {os: macos-15-intel, platform: macos-x64}
+          - {os: macos-15, platform: macos-arm64}
+          - {os: ubuntu-22.04, platform: linux-x64}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - if: runner.os == 'Windows'
+        run: choco install inkscape -y --no-progress
+      - if: runner.os == 'macOS'
+        run: brew install --cask inkscape
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfuse2 libx11-6 libxext6 libxrender1 libxft2
+      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", TARGET_PLATFORM: "${{ matrix.platform }}"}
+        run: python publisher/tools/delivery.py program --release "$RELEASE_VERSION" --platform "$TARGET_PLATFORM"
+  manifest:
+    needs: [prepare, resources, programs]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
+        run: python publisher/tools/delivery.py manifest --release "$RELEASE_VERSION"
+  installers:
+    needs: [prepare, manifest]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, platform: windows-x64}
+          - {os: macos-15-intel, platform: macos-x64}
+          - {os: macos-15, platform: macos-arm64}
+          - {os: ubuntu-22.04, platform: linux-x64}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - if: runner.os == 'Windows'
+        run: choco install innosetup -y --no-progress
+      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", TARGET_PLATFORM: "${{ matrix.platform }}"}
+        run: python publisher/tools/delivery.py installer --release "$RELEASE_VERSION" --platform "$TARGET_PLATFORM"
+  mac-installer:
+    needs: [prepare, installers]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
+        run: python publisher/tools/delivery.py mac --release "$RELEASE_VERSION"
