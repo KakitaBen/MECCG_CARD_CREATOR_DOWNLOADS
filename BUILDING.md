@@ -56,5 +56,10 @@ certificats HTTPS embarqués. Les preuves JSON ne sont déposées qu'après succ
 La release reste en brouillon jusqu'à sa validation. Les releases déjà publiques
 ne peuvent pas être remplacées par cette chaîne.
 
+Depuis v0.60.20, chaque lot inclut aussi une archive `.update.zip` indexée pour
+les mises à jour depuis l’application. Les anciens lots d’illustrations sont
+vérifiés et indexés un par un sans modifier leurs archives d’origine. Le README
+et la configuration publique du service accompagnent les ressources communes.
+
 Les premières versions restent des candidats non signés. Une diffusion Mac
 sans avertissement Gatekeeper demande encore signature et notarisation Apple.

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 
 REPO = "KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS"
@@ -94,8 +95,8 @@ class Delivery:
         base_folder = self.build / "baseline"
         self.download(base, ["manifest.json"], base_folder)
         manifest = json.loads((base_folder / "manifest.json").read_text(encoding="utf-8"))
-        from distribution import atomic_json, digest, validate_manifest
-        from package_delivery import make_component
+        from distribution import Installer, atomic_json, digest, validate_manifest
+        from package_delivery import make_component, make_update_patch
         validate_manifest(manifest, "windows-x64")
         if manifest.get("sample_assets") or manifest["version"] != base:
             raise ValueError("The baseline must contain the complete collection")
@@ -105,20 +106,34 @@ class Delivery:
             archive = self.downloads / component["name"]
             if archive.stat().st_size != component["size"] or digest(archive) != component["sha256"]:
                 raise ValueError("Baseline download checksum mismatch")
+            # The old baseline predates file-level updates. Verify its original
+            # inventory while extracting one lot at a time; retain the original
+            # tarball, hashes and inventory and add only the indexed ZIP.
+            if not component.get("patch"):
+                with tempfile.TemporaryDirectory(prefix="index-", dir=self.build) as directory:
+                    root = Path(directory)
+                    Installer(self.build / "verification").extract(archive, component, root)
+                    component["patch"] = make_update_patch(root, component["files"], self.downloads,
+                                                           component["name"].removesuffix(".tar.gz"))
+            else:
+                self.download(base, [component["patch"]["name"]])
         data = [p for folder in ("data", "layouts") for p in (self.source / folder).rglob("*") if p.is_file()]
-        data.append(self.source / "CHANGELOG.txt")
+        data.extend(self.source / name for name in ("CHANGELOG.txt", "README.md", "project_services.json")
+                    if (self.source / name).is_file())
         graphics = [p for p in (self.source / "asset").rglob("*") if p.is_file()
                     and not p.relative_to(self.source).as_posix().startswith("asset/illustrations/")]
         components = [make_component(self.source, data, self.downloads, "data-layouts"),
                       make_component(self.source, graphics, self.downloads, "graphics-fonts"), *components]
         atomic_json(self.downloads / "resources.json", components)
-        self.upload(release, [self.downloads / c["name"] for c in components] + [self.downloads / "resources.json"])
+        self.upload(release, [self.downloads / name for c in components for name in (c["name"], c["patch"]["name"])]
+                    + [self.downloads / "resources.json"])
 
     def program(self, release, platform):
         self.run([sys.executable, "-m", "pip", "install", "-r", "generator/requirements-gui.txt", "pyinstaller>=6.12,<7"])
         self.python("build_delivery_program.py", "--output", self.build / "program")
         self.python("package_delivery.py", "--program", self.build / "program", "--platform", platform, "--output", self.downloads)
-        self.upload(release, [*self.downloads.glob("*.tar.gz"), self.downloads / (platform + ".json")])
+        self.upload(release, [*self.downloads.glob("*.tar.gz"), *self.downloads.glob("*.update.zip"),
+                              self.downloads / (platform + ".json")])
 
     def manifest(self, release):
         self.download(release, ["resources.json", *[key + ".json" for key in PLATFORMS]])
