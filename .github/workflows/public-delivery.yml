@@ -14,7 +14,27 @@ on:
         description: Complete verified illustration baseline already in Releases
         type: string
         required: true
-        default: v0.59.46
+        default: v0.60.31
+      illustrations_version:
+        description: Published independent collection to reference (empty keeps legacy delivery)
+        type: string
+        default: ""
+      collection_only:
+        description: Prepare an independent illustration collection without building software
+        type: boolean
+        default: false
+      collection_version:
+        description: Independent revision such as 1.00 or 1.2
+        type: string
+        default: "1.00"
+      collection_base:
+        description: Software baseline to migrate; empty builds artwork from source
+        type: string
+        default: "v0.60.31"
+      previous_collection:
+        description: Previous independent revision for reuse when building from source
+        type: string
+        default: ""
       windows_only:
         description: Validate Windows installer against an existing draft without rebuilding other platforms
         type: boolean
@@ -48,7 +68,7 @@ jobs:
       - run: echo "Standard public runner is available. No private source was needed for this check."
   prepare:
     needs: runner-check
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.check_only && !inputs.windows_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.check_only && !inputs.windows_only && !inputs.collection_only }}
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.release.outputs.version }}
@@ -91,6 +111,7 @@ jobs:
           path: source
           persist-credentials: false
       - uses: actions/checkout@v4
+        if: inputs.illustrations_version == ''
         with:
           repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
           ref: delivery-${{ inputs.resources_version }}
@@ -102,8 +123,8 @@ jobs:
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5
         with: {python-version: "3.13"}
-      - env: {BASE_VERSION: "${{ inputs.resources_version }}", RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
-        run: python publisher/tools/delivery.py resources --release "$RELEASE_VERSION" --base "$BASE_VERSION"
+      - env: {BASE_VERSION: "${{ inputs.resources_version }}", RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", COLLECTION: "${{ inputs.illustrations_version }}"}
+        run: python publisher/tools/delivery.py resources --release "$RELEASE_VERSION" --base "$BASE_VERSION" --collection "$COLLECTION"
   programs:
     needs: prepare
     strategy:
@@ -151,8 +172,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with: {python-version: "3.13"}
-      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
-        run: python publisher/tools/delivery.py manifest --release "$RELEASE_VERSION"
+      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", COLLECTION: "${{ inputs.illustrations_version }}"}
+        run: python publisher/tools/delivery.py manifest --release "$RELEASE_VERSION" --collection "$COLLECTION"
   installers:
     needs: [prepare, manifest]
     strategy:
@@ -224,3 +245,29 @@ jobs:
         with: {python-version: "3.13"}
       - run: choco install innosetup --version=6.7.1 --allow-downgrade -y --no-progress
       - run: python publisher/tools/delivery.py installer --release v0.60.32 --platform windows-x64
+
+  illustration-collection:
+    needs: runner-check
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.collection_only && !inputs.check_only && !inputs.windows_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Validate immutable source selection
+        env: {SOURCE_COMMIT: "${{ inputs.source_commit }}"}
+        run: '[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1'
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - env:
+          COLLECTION: ${{ inputs.collection_version }}
+          BASE_VERSION: ${{ inputs.collection_base }}
+          PREVIOUS: ${{ inputs.previous_collection }}
+        run: python publisher/tools/delivery.py illustrations --collection "$COLLECTION" --base "$BASE_VERSION" --previous-collection "$PREVIOUS"

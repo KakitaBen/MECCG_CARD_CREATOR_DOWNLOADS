@@ -1,4 +1,7 @@
 import contextlib
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 import io
 from pathlib import Path
 import subprocess
@@ -52,6 +55,40 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaises(BuildFailure) as caught:
                 delivery.python("build_installers.py")
             self.assertEqual((caught.exception.step, caught.exception.category), ("build-installers", "subprocess-failed"))
+
+    def test_independent_software_build_skips_legacy_assets_and_lfs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir()
+            (root / "data/book.xlsx").write_bytes(b"literal")
+            (root / "asset/illustrations/SET").mkdir(parents=True)
+            (root / "asset/illustrations/SET/art.png").write_bytes(b"unmaterialized LFS pointer")
+            (root / "asset/font.ttf").write_bytes(b"font")
+            delivery = Delivery(root)
+            delivery.collection_reference = Mock(return_value=({"version":"1.00"}, {}))
+            delivery.legacy_resources = Mock(side_effect=AssertionError("Old application assets must not be used"))
+            delivery.upload = Mock()
+            delivery.run = Mock(side_effect=AssertionError("Software packaging must not fetch LFS"))
+            def component(source, paths, output, label):
+                self.assertTrue(all("illustrations" not in p.parts for p in paths))
+                return {"name":label+".tar.gz","patch":{"name":label+".update.zip"}}
+            def write(path,value): path.write_text(json.dumps(value))
+            with patch.dict(sys.modules, {"distribution":SimpleNamespace(atomic_json=write),
+                                         "package_delivery":SimpleNamespace(make_component=component)}):
+                delivery.resources("v1.0.0", "unused", root, "1.00")
+            self.assertEqual(json.loads((delivery.downloads / "illustrations-reference.json").read_text()), {"version":"1.00"})
+            delivery.legacy_resources.assert_not_called()
+            delivery.run.assert_not_called()
+
+    def test_library_archive_references_cannot_download_arbitrary_urls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            delivery = Delivery(directory)
+            delivery.download = Mock()
+            for url in ("http://github.com/owner/repo/file", "https://outside.test/archive.tar.gz",
+                        "https://github.com/KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS/releases/download/v0.60.31/archive.tar.gz"):
+                with self.assertRaises(ValueError): delivery.download_library_asset(url,"archive.tar.gz")
+            delivery.download_library_asset("https://github.com/KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS/releases/download/meccg-illustrations-v1.2/archive.tar.gz","archive.tar.gz")
+            delivery.download.assert_called_once_with("meccg-illustrations-v1.2", ["archive.tar.gz"])
 
     def test_reference_contains_only_illustrations_and_all_sixteen_lots(self):
         images = [{"name": f"illustrations-{index}.tar.gz", "files": {f"asset/illustrations/{index}.png": {}}} for index in range(16)]
