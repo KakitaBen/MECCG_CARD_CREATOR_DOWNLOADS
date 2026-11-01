@@ -328,7 +328,7 @@ def main():
     parser.add_argument("--source", type=Path, default=Path("source"))
     parser.add_argument("--commit")
     parser.add_argument("--release")
-    parser.add_argument("--base", default="v0.59.46")
+    parser.add_argument("--base")
     parser.add_argument("--collection")
     parser.add_argument("--previous-collection")
     parser.add_argument("--baseline", type=Path, default=Path("source-baseline"))

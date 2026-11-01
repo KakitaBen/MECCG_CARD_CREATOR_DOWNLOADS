@@ -10,10 +10,32 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.delivery import Delivery, BuildFailure, illustration_components, version
+from tools.delivery import Delivery, BuildFailure, illustration_components, main, version
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_collection_cli_does_not_default_to_an_old_software_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            delivery = Delivery(directory)
+            delivery.illustrations = Mock()
+            with patch("tools.delivery.Delivery", return_value=delivery), patch.object(
+                    sys, "argv", ["delivery.py", "illustrations", "--collection", "1.01",
+                                  "--previous-collection", "1.00"]), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(), 0)
+            delivery.illustrations.assert_called_once_with("1.01", None, "1.00")
+
+    def test_missing_collection_cannot_silently_download_a_legacy_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            delivery = Delivery(directory)
+            delivery.resources = Mock()
+            output = io.StringIO()
+            with patch("tools.delivery.Delivery", return_value=delivery), patch.object(
+                    sys, "argv", ["delivery.py", "resources", "--release", "v0.60.33"]), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(main(), 1)
+            delivery.resources.assert_not_called()
+            self.assertEqual(output.getvalue(), "Build stopped: step=private-command, category=invalid-data\n")
+
     def test_private_command_output_never_reaches_public_streams(self):
         with tempfile.TemporaryDirectory() as directory:
             delivery = Delivery(directory)
