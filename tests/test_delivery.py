@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.delivery import Delivery, illustration_components, version
+from tools.delivery import Delivery, BuildFailure, illustration_components, version
 
 
 class DeliveryTests(unittest.TestCase):
@@ -21,6 +21,37 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(output.getvalue(), "")
             self.assertIn("PRIVATE_SOURCE", delivery.log.read_text())
             self.assertIn("PRIVATE_TRACEBACK", delivery.log.read_text())
+
+    def test_public_diagnostic_contains_only_allowlisted_step_and_category(self):
+        with tempfile.TemporaryDirectory() as directory:
+            delivery = Delivery(directory)
+            script = Path(directory) / "standalone/build_installers.py"
+            script.parent.mkdir()
+            script.write_text("import os,json,sys\nfrom pathlib import Path\n"
+                "Path(os.environ['MECCG_BUILD_STATUS_FILE']).write_text(json.dumps("
+                "{'step':'silent-install','state':'failed','category':'subprocess-failed'}))\n"
+                "print('PRIVATE_SOURCE');print('PRIVATE_TOKEN',file=sys.stderr);sys.exit(7)\n")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                with self.assertRaises(BuildFailure) as caught:
+                    delivery.python("build_installers.py")
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual((caught.exception.step, caught.exception.category), ("silent-install", "subprocess-failed"))
+            self.assertNotIn("PRIVATE", str(caught.exception))
+            self.assertIn("PRIVATE_SOURCE", delivery.log.read_text())
+            self.assertIn("PRIVATE_TOKEN", delivery.log.read_text())
+
+    def test_untrusted_status_cannot_publish_private_strings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            delivery = Delivery(directory)
+            script = Path(directory) / "standalone/build_installers.py"
+            script.parent.mkdir()
+            script.write_text("import os,json,sys\nfrom pathlib import Path\n"
+                "Path(os.environ['MECCG_BUILD_STATUS_FILE']).write_text(json.dumps("
+                "{'step':'PRIVATE_SOURCE','state':'failed','category':'PRIVATE_TOKEN'}))\nsys.exit(1)\n")
+            with self.assertRaises(BuildFailure) as caught:
+                delivery.python("build_installers.py")
+            self.assertEqual((caught.exception.step, caught.exception.category), ("build-installers", "subprocess-failed"))
 
     def test_reference_contains_only_illustrations_and_all_sixteen_lots(self):
         images = [{"name": f"illustrations-{index}.tar.gz", "files": {f"asset/illustrations/{index}.png": {}}} for index in range(16)]

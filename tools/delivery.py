@@ -13,6 +13,25 @@ import traceback
 REPO = "KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS"
 PLATFORMS = ("windows-x64", "macos-x64", "macos-arm64", "linux-x64")
 
+PUBLIC_STEPS = frozenset(("private-command", "smoke-delivery", "build-installers", "build-program",
+    "package-delivery", "assemble-manifest", "launcher-packaging", "inno-compile", "silent-install",
+    "verify-installer-options", "verify-illustrations-opt-out", "launcher-help", "launcher-https"))
+PUBLIC_CATEGORIES = frozenset(("subprocess-failed", "timeout", "permission-denied", "missing-file", "invalid-data", "io-error", "internal-error"))
+
+class BuildFailure(RuntimeError):
+    def __init__(self, step, category):
+        self.step = step if step in PUBLIC_STEPS else "private-command"
+        self.category = category if category in PUBLIC_CATEGORIES else "internal-error"
+        super().__init__("Private build stage failed")
+
+def error_category(error):
+    if isinstance(error, subprocess.TimeoutExpired): return "timeout"
+    if isinstance(error, PermissionError): return "permission-denied"
+    if isinstance(error, FileNotFoundError): return "missing-file"
+    if isinstance(error, (ValueError, KeyError, TypeError)): return "invalid-data"
+    if isinstance(error, OSError): return "io-error"
+    return "internal-error"
+
 
 def version(value):
     if not re.fullmatch(r"v\d+\.\d+\.\d+", value):
@@ -37,19 +56,35 @@ class Delivery:
         self.build = self.source / "build/public-delivery"
         self.build.mkdir(parents=True, exist_ok=True)
         self.log = self.build / "private-build.log"
+        self.status = self.build / "build-status.json"
         self.downloads = self.build / "downloads"
         self.downloads.mkdir(exist_ok=True)
 
-    def run(self, arguments, *, cwd=None, capture=False):
+    def run(self, arguments, *, cwd=None, capture=False, step="private-command", env=None):
         with self.log.open("ab") as log:
             result = subprocess.run([str(item) for item in arguments], cwd=cwd or self.source,
-                                    stdout=subprocess.PIPE if capture else log, stderr=log)
+                                    stdout=subprocess.PIPE if capture else log, stderr=log, env=env)
         if result.returncode:
-            raise RuntimeError("Private command failed")
+            category = "subprocess-failed"
+            if self.status.is_file() and self.status.stat().st_size <= 1024:
+                try:
+                    status = json.loads(self.status.read_text(encoding="utf-8"))
+                    if (status.get("state") == "failed" and status.get("step") in PUBLIC_STEPS
+                            and status.get("category") in PUBLIC_CATEGORIES):
+                        step, category = status["step"], status["category"]
+                except (ValueError, OSError, AttributeError, TypeError):
+                    pass
+            raise BuildFailure(step, category)
         return result.stdout.decode("utf-8").strip() if capture else None
 
     def python(self, script, *arguments):
-        self.run([sys.executable, self.source / "standalone" / script, *arguments])
+        steps = {"smoke_delivery.py": "smoke-delivery", "build_installers.py": "build-installers",
+                 "build_delivery_program.py": "build-program", "package_delivery.py": "package-delivery",
+                 "assemble_delivery.py": "assemble-manifest"}
+        self.status.unlink(missing_ok=True)
+        env = dict(os.environ, MECCG_BUILD_STATUS_FILE=str(self.status))
+        self.run([sys.executable, self.source / "standalone" / script, *arguments],
+                 step=steps.get(script, "private-command"), env=env)
 
     def download(self, release, names, destination=None):
         destination = destination or self.downloads
@@ -147,6 +182,11 @@ class Delivery:
         self.upload(release, files)
 
     def installer(self, release, platform):
+        # A validation-only rerun must never replace a published installer.
+        releases = json.loads(self.run(["gh", "api", f"repos/{REPO}/releases?per_page=100"], capture=True))
+        selected = next((item for item in releases if item["tag_name"] == release), None)
+        if not selected or not selected["draft"]:
+            raise ValueError("Installer validation requires an existing draft release")
         self.run([sys.executable, "-m", "pip", "install", "-r", "standalone/requirements-delivery.txt"])
         self.download(release, ["manifest.json", "installer-config-" + platform + ".json"])
         manifest = json.loads((self.downloads / "manifest.json").read_text(encoding="utf-8"))
@@ -164,6 +204,9 @@ class Delivery:
                 or not report.get("pillow_tk_pixels") or not report.get("bundled_service_https")):
             raise ValueError("The installed application did not pass validation")
         report["bundled_https_verified"] = True
+        if platform == "windows-x64":
+            report["unicode_installation_options"] = True
+            report["illustration_opt_out_preserved"] = True
         proof.write_text(json.dumps(report, indent=2), encoding="utf-8")
         self.upload(release, [*output.glob("*.exe"), *output.glob("*.deb"), *output.glob("*.pkg"), proof])
 
@@ -208,7 +251,9 @@ def main():
     except Exception as error:
         with delivery.log.open("a", encoding="utf-8") as log:
             traceback.print_exc(file=log)
-        print(f"Build stopped ({type(error).__name__}). Detailed source logs are not published.", flush=True)
+        step = error.step if isinstance(error, BuildFailure) else "private-command"
+        category = error.category if isinstance(error, BuildFailure) else error_category(error)
+        print(f"Build stopped: step={step}, category={category}", flush=True)
         return 1
     print("Completed: " + args.mode, flush=True)
     return 0

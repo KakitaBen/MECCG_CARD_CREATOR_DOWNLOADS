@@ -15,6 +15,10 @@ on:
         type: string
         required: true
         default: v0.59.46
+      windows_only:
+        description: Validate Windows installer against an existing draft without rebuilding other platforms
+        type: boolean
+        default: false
       check_only:
         description: Check free runner access without reading private source
         type: boolean
@@ -44,7 +48,7 @@ jobs:
       - run: echo "Standard public runner is available. No private source was needed for this check."
   prepare:
     needs: runner-check
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.check_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.check_only && !inputs.windows_only }}
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.release.outputs.version }}
@@ -196,3 +200,27 @@ jobs:
         with: {python-version: "3.13"}
       - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
         run: python publisher/tools/delivery.py mac --release "$RELEASE_VERSION"
+
+  windows-check:
+    needs: runner-check
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && !inputs.check_only }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate immutable source selection
+        env: {SOURCE_COMMIT: "${{ inputs.source_commit }}"}
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Build stopped: step=source-selection, category=invalid-data'; exit 1; }
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: choco install innosetup --version=6.7.1 --allow-downgrade -y --no-progress
+      - run: python publisher/tools/delivery.py installer --release v0.60.32 --platform windows-x64
