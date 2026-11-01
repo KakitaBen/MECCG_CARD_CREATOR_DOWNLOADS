@@ -1,48 +1,19 @@
-name: Build installers with free public runners
+name: Build application installers
 on:
   push:
     branches: [main]
-    paths: [".github/workflows/public-delivery.yml", "tools/**", "tests/**"]
+    paths: [".github/workflows/**", "tools/**", "tests/**"]
   workflow_dispatch:
     inputs:
       source_commit:
-        description: Full validated commit from the private source repository
+        description: Full validated source commit (40 characters)
         type: string
         required: true
-        default: 511744326ee546be048b040d2e52b30c5902d3fb
-      resources_version:
-        description: Complete verified illustration baseline already in Releases
-        type: string
-        required: true
-        default: v0.60.31
       illustrations_version:
-        description: Published independent collection to reference (empty keeps legacy delivery)
+        description: Published illustration collection to install
         type: string
-        default: ""
-      collection_only:
-        description: Prepare an independent illustration collection without building software
-        type: boolean
-        default: false
-      collection_version:
-        description: Independent revision such as 1.00 or 1.2
-        type: string
+        required: true
         default: "1.00"
-      collection_base:
-        description: Software baseline to migrate; empty builds artwork from source
-        type: string
-        default: "v0.60.31"
-      previous_collection:
-        description: Previous independent revision for reuse when building from source
-        type: string
-        default: ""
-      windows_only:
-        description: Validate Windows installer against an existing draft without rebuilding other platforms
-        type: boolean
-        default: false
-      check_only:
-        description: Check free runner access without reading private source
-        type: boolean
-        default: true
 permissions:
   contents: write
 concurrency:
@@ -68,7 +39,7 @@ jobs:
       - run: echo "Standard public runner is available. No private source was needed for this check."
   prepare:
     needs: runner-check
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.check_only && !inputs.windows_only && !inputs.collection_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.release.outputs.version }}
@@ -76,11 +47,11 @@ jobs:
       - name: Validate selected source and read access
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
-          RESOURCES_VERSION: ${{ inputs.resources_version }}
+          COLLECTION: ${{ inputs.illustrations_version }}
           READ_TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
         run: |
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Select a full validated source commit.'; exit 1; }
-          [[ "$RESOURCES_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          [[ "$COLLECTION" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo 'Build stopped: step=collection-selection, category=invalid-data'; exit 1; }
           test -n "$READ_TOKEN" || { echo 'Add SOURCE_READ_TOKEN with read-only access to the private source repository.'; exit 1; }
       - uses: actions/checkout@v4
         with: {path: publisher, persist-credentials: false}
@@ -110,21 +81,10 @@ jobs:
           token: ${{ secrets.SOURCE_READ_TOKEN }}
           path: source
           persist-credentials: false
-      - uses: actions/checkout@v4
-        if: inputs.illustrations_version == ''
-        with:
-          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
-          ref: delivery-${{ inputs.resources_version }}
-          token: ${{ secrets.SOURCE_READ_TOKEN }}
-          path: source-baseline
-          persist-credentials: false
-          filter: blob:none
-          sparse-checkout: .gitattributes
-          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5
         with: {python-version: "3.13"}
-      - env: {BASE_VERSION: "${{ inputs.resources_version }}", RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", COLLECTION: "${{ inputs.illustrations_version }}"}
-        run: python publisher/tools/delivery.py resources --release "$RELEASE_VERSION" --base "$BASE_VERSION" --collection "$COLLECTION"
+      - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}", COLLECTION: "${{ inputs.illustrations_version }}"}
+        run: python publisher/tools/delivery.py resources --release "$RELEASE_VERSION" --collection "$COLLECTION"
   programs:
     needs: prepare
     strategy:
@@ -221,53 +181,3 @@ jobs:
         with: {python-version: "3.13"}
       - env: {RELEASE_VERSION: "${{ needs.prepare.outputs.version }}"}
         run: python publisher/tools/delivery.py mac --release "$RELEASE_VERSION"
-
-  windows-check:
-    needs: runner-check
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && !inputs.check_only }}
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - name: Validate immutable source selection
-        env: {SOURCE_COMMIT: "${{ inputs.source_commit }}"}
-        run: |
-          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Build stopped: step=source-selection, category=invalid-data'; exit 1; }
-      - uses: actions/checkout@v4
-        with: {path: publisher, persist-credentials: false}
-      - uses: actions/checkout@v4
-        with:
-          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
-          ref: ${{ inputs.source_commit }}
-          token: ${{ secrets.SOURCE_READ_TOKEN }}
-          path: source
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
-      - run: choco install innosetup --version=6.7.1 --allow-downgrade -y --no-progress
-      - run: python publisher/tools/delivery.py installer --release v0.60.32 --platform windows-x64
-
-  illustration-collection:
-    needs: runner-check
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.collection_only && !inputs.check_only && !inputs.windows_only }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    steps:
-      - name: Validate immutable source selection
-        env: {SOURCE_COMMIT: "${{ inputs.source_commit }}"}
-        run: '[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1'
-      - uses: actions/checkout@v4
-        with: {path: publisher, persist-credentials: false}
-      - uses: actions/checkout@v4
-        with:
-          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
-          ref: ${{ inputs.source_commit }}
-          token: ${{ secrets.SOURCE_READ_TOKEN }}
-          path: source
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
-      - env:
-          COLLECTION: ${{ inputs.collection_version }}
-          BASE_VERSION: ${{ inputs.collection_base }}
-          PREVIOUS: ${{ inputs.previous_collection }}
-        run: python publisher/tools/delivery.py illustrations --collection "$COLLECTION" --base "$BASE_VERSION" --previous-collection "$PREVIOUS"

@@ -1,0 +1,61 @@
+name: Prepare illustration collection
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full validated source commit (40 characters)
+        type: string
+        required: true
+      collection_version:
+        description: New illustration revision to prepare
+        type: string
+        required: true
+      previous_collection:
+        description: Published collection whose unchanged lots can be reused
+        type: string
+        required: true
+        default: "1.00"
+permissions:
+  contents: write
+concurrency:
+  group: public-delivery
+  cancel-in-progress: false
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+  GH_TOKEN: ${{ github.token }}
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  illustration-collection:
+    if: github.repository == 'KakitaBen/MECCG_CARD_CREATOR_DOWNLOADS' && github.actor == 'KakitaBen'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Validate source and collection selection
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          COLLECTION: ${{ inputs.collection_version }}
+          PREVIOUS: ${{ inputs.previous_collection }}
+          READ_TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Build stopped: step=source-selection, category=invalid-data'; exit 1; }
+          [[ "$COLLECTION" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$PREVIOUS" =~ ^v?[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo 'Build stopped: step=collection-selection, category=invalid-data'; exit 1; }
+          test -n "$READ_TOKEN" || { echo 'Build stopped: step=source-selection, category=missing-credential'; exit 1; }
+      - uses: actions/checkout@v4
+        with: {path: publisher, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with:
+          repository: KakitaBen/MECCG_AUTO_CARD_EDITOR
+          ref: ${{ inputs.source_commit }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: python -m unittest discover -s publisher/tests
+      - env:
+          COLLECTION: ${{ inputs.collection_version }}
+          PREVIOUS: ${{ inputs.previous_collection }}
+        run: python publisher/tools/delivery.py illustrations --collection "$COLLECTION" --previous-collection "$PREVIOUS"
